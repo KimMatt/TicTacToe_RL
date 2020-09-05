@@ -47,7 +47,7 @@ class PPO:
 
         # initialize value and pi approximations 
         self.v = construct_mlp((state_size, 64, 64, 1), nn.Tanh)
-        self.pi = construct_mlp((state_size + action_size, 64, 64, 1), nn.Tanh)
+        self.pi = construct_mlp((state_size, 64, 64, state_size), nn.Tanh, nn.SoftMax)
 
 
     def _produce_trajectories(self):
@@ -89,7 +89,7 @@ class PPO:
         for i in range(self.pi_train_iters):
             pi_optim.zero_grad()
 
-            new_logps = self.pi(self.states + self.actions)
+            new_logps = self.get_logps(self.states, self.actions)
             ratios = torch.exp(new_logps - self.logps)
             clipped_adv = torch.clamp(ratios, 1+self.clip, 1-self.clip) * self.advantages
             loss = -(torch.min(clipped_adv, self.advantages * ratios)).mean()
@@ -117,10 +117,21 @@ class PPO:
             self._produce_trajectories()
             self._update()
 
+    def get_logps(self, states, actions):
+        pis = self.pi(states)
+        return np.array([pis[i][action] for i, action in enumerate(actions)])
+
 
     def get_action(self, state):
-        p =  self.pi(state)
-        pass
+        # .2 .3 .5
+        pi_vals = self.pi(state)
+        roll = np.random.random()
+        cum_sum = 0
+        for i in range(len(pi_vals)):
+            cum_sum += pi_vals[i]
+            if cum_sum >= roll:
+                return i, pi_vals[i]
+        return len(pi_vals) - 1, pi_vals[-1]
 
 
     def load_model(self, path):
