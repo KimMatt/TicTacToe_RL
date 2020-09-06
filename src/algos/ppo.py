@@ -5,10 +5,12 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam
 import numpy as np
+import scipy.signal
 
 from src.enviro.tictactoe import TicTacToe
 from src.utils.mlp import construct_mlp
 from src.utils.logger import Logger
+
 
 
 class PPO:
@@ -49,6 +51,29 @@ class PPO:
         self.v = construct_mlp((state_size, 64, 64, 1), nn.Tanh)
         self.pi = construct_mlp((state_size, 64, 64, state_size), nn.Tanh, nn.SoftMax)
 
+    def _cum_sum(self, x, discount):
+        """
+        magic from rllab for computing discounted cumulative sums of vectors.
+        input:
+            vector x,
+            [x0,
+             x1,
+             x2]
+        output:
+            [x0 + discount * x1 + discount^2 * x2,
+             x1 + discount * x2,
+             x2]
+        """
+        return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+
+
+    def _populate_buffers(self, ep_start, ep_end, final_reward):
+        values = np.append(self.values, final_reward)
+        deltas = self.rewards[ep_start:ep_end] + self.gamma * self.values[ep_start+1:ep_end+1] - self.values[ep_start:ep_end]
+        self.advantages[ep_start:ep_end] = self._cum_sum(deltas, self.gamma * self.lambda)
+        rewards = np.append(self.rewards, final_reward)
+        self.rewards[ep_start:ep_end] = self._cum_sum(self.rewards, self.gamma)
+
 
     def _produce_trajectories(self):
 
@@ -68,15 +93,15 @@ class PPO:
             self.states[t] = state
             self.actions[t], self.logps[t] = self.get_action(state)
             self.values[t] = self.v(state)
-            next_state, self.rewards[t] = tictactoe.play_move()
+            next_state, self.rewards[t] = tictactoe.play_move(self.actions[t])
             # episode over
             if next_state is None:
                 tictactoe.reset()
                 ep_start = t + 1
-                self.populate_buffers(ep_start, t, 0)
+                self._populate_buffers(ep_start, t, 0)
             state = next_state
         final_reward = 0 if state is None else self.v(state)
-        self.populate_buffers(ep_start, len(self.minibatch_size)-1, final_reward)
+        self._populate_buffers(ep_start, len(self.minibatch_size)-1, final_reward)
 
 
 
@@ -123,13 +148,12 @@ class PPO:
 
 
     def get_action(self, state):
-        # .2 .3 .5
         pi_vals = self.pi(state)
         roll = np.random.random()
         cum_sum = 0
         for i in range(len(pi_vals)):
             cum_sum += pi_vals[i]
-            if cum_sum >= roll:
+            if roll <= cum_sum:
                 return i, pi_vals[i]
         return len(pi_vals) - 1, pi_vals[-1]
 
