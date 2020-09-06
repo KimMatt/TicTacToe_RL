@@ -1,15 +1,15 @@
 import torch
 
-from src.algos.ac import ActorCritic
+from src.algos.a2c import ActorCritic
 from src.algos.ppo import PPO 
 from src.algos.td import TD
 
-algos = {'ppo': PPO, 'td': TD, 'ac':ActorCritic}
+algo_types_to_args = {'ppo': PPO, 'td': TD, 'ac':ActorCritic}
 
 class Agent:
 
     def __init__(self, algo_type, params=None):
-        algo = algo_type_to_imp.get(algo_type)
+        algo = algo_types_to_args.get(algo_type)
         self.agent = algo(params)
 
     def load_model(self, model_name):
@@ -18,5 +18,8 @@ class Agent:
     def train_model(self):
         self.agent.train_model()
 
-    def get_action(self, state):
-        return self.agent.get_action(state)
+    def save_model(self):
+        self.agent.save_model()
+
+    def get_action(self, state, available_moves):
+        return self.agent.get_action(state, available_moves)
