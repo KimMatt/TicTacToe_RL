@@ -60,7 +60,8 @@ class TicTacToe:
         else:
             raise InvalidMoveException
 
-    def play_move(self, player_n, move):
+
+    def play_move(self, move):
         # Play player move
         reward = self._play_move(1, move)
         # If it results in the end of a game
@@ -68,7 +69,7 @@ class TicTacToe:
             return reward, self.game_state
         # Play opponent's move
         opponent_move, _ = self.opponent.get_action(self.game_state, self.possible_moves)
-        opponent_reward = self._play_move(0, opponent_move)
+        opponent_reward = self._play_move(2, opponent_move)
         if opponent_reward == 0.5:
             return opponent_reward, self.game_state
         elif opponent_reward == 1:
@@ -77,4 +78,4 @@ class TicTacToe:
 
 
     def reset(self):
-        self.__init__(self.logger)
+        self.__init__(self.logger, self.opponent)
