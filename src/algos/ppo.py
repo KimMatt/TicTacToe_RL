@@ -15,15 +15,25 @@ from src.utils.utils import cum_sum
 
 class PPO:
 
+
     def _initialize_buffers(self):
         # create the buffers for trajectory values
-        self.advantages = torch.zeros(self.minibatch_size, dtype=torch.float)
-        self.actions = torch.zeros(self.minibatch_size, dtype=torch.float)
-        self.values = torch.zeros(self.minibatch_size, dtype=torch.float)
-        self.rewards = torch.zeros(self.minibatch_size, dtype=torch.float)
-        self.states = torch.zeros(
-            (self.minibatch_size, self.state_size), dtype=torch.float)
-        self.logps = torch.zeros(self.minibatch_size, dtype=torch.float)
+        self.advantages = np.zeros(self.minibatch_size, dtype=np.float32)
+        self.actions = np.zeros(self.minibatch_size, dtype=np.float32)
+        self.values = np.zeros(self.minibatch_size, dtype=np.float32)
+        self.rewards = np.zeros(self.minibatch_size, dtype=np.float32)
+        self.states = np.zeros(
+            (self.minibatch_size, self.state_size), dtype=np.float32)
+        self.logps = np.zeros(self.minibatch_size, dtype=np.float32)
+
+
+    def get_buffers_as_tensors(self):
+        return {'advantages': torch.tensor(self.advantages, dtype=torch.float).to(self.device),
+                'actions': torch.tensor(self.actions, dtype=torch.float).to(self.device),
+                'values': torch.tensor(self.values, dtype=torch.float).to(self.device),
+                'rewards': torch.tensor(self.rewards, dtype=torch.float).to(self.device),
+                'states': torch.tensor(self.states, dtype=torch.float).to(self.device),
+                'logps': torch.tensor(self.logps, dtype=torch.float).to(self.device)}
 
 
     def __init__(self, params):
@@ -38,9 +48,16 @@ class PPO:
             assert param in self.params.keys(), """Invalid parameter specified
             (--{})\nValid params: [{}]""".format(param, ", ".join(list(self.params.keys())))
             self.params[param] = params[param]
+
         # assign them locally
         for param in self.params.keys():
             exec('self.{}={}'.format(param, self.params[param]))
+
+        # since by default params are floats
+        self.minibatch_size = int(self.minibatch_size)
+        self.epochs = int(self.epochs)
+        self.pi_train_iters = int(self.pi_train_iters)
+        self.v_train_iters = int(self.v_train_iters)
 
         # tic tac toe has 9 squares :)
         self.state_size = 9
@@ -51,96 +68,26 @@ class PPO:
         # initialize value and pi approximations
         self.v = construct_mlp((self.state_size, 64, 64, 1), nn.Tanh).to(self.device)
         self.pi = construct_mlp((self.state_size, 64, 64, self.state_size), nn.Tanh, nn.Softmax).to(self.device)
+        self.pi_optim = Adam(self.pi.parameters(), lr=self.pi_lr)
+        self.v_optim = Adam(self.v.parameters(), lr=self.v_lr)
 
 
     def _populate_buffers(self, ep_start, ep_end, final_reward):
-        values = torch.zeros((ep_end - ep_start) + 1, dtype=torch.float)
-        values[0:(ep_end-ep_start)] = self.values[ep_start:ep_end]
-        values[-1] = final_reward
-        deltas = self.rewards[ep_start:ep_end] + (self.gamma * self.values[ep_start+1:ep_end+1]) - self.values[ep_start:ep_end]
-        print(deltas)
-        self.advantages[ep_start:ep_end] = cum_sum(deltas, self.gamma * self.lam)
-        self.rewards[ep_start:ep_end] = cum_sum(self.rewards[ep_start:ep_end], self.gamma)
+        print(final_reward, self.values[ep_start:ep_end+1], self.rewards[ep_start:ep_end+1])
+        values = np.append(self.values[ep_start:ep_end+1], np.array([final_reward]))
+        deltas = self.rewards[ep_start:ep_end+1] + (self.gamma * values[1:]) - values[:-1]
+        print(ep_start, ep_end)
+        self.advantages[ep_start:ep_end+1] = cum_sum(deltas, self.gamma * self.lam)
+        self.rewards[ep_start:ep_end+1] = cum_sum(self.rewards[ep_start:ep_end+1], self.gamma)
 
 
-    def _produce_trajectories(self):
-
-        self._initialize_buffers()
-        logger = Logger()
-        tictactoe = TicTacToe(logger, self)
-        state = tictactoe.game_state[:]
-        self.states[0] = torch.tensor(state, dtype=torch.float)
-
-        t = 0
-        ep_start = 0
-
-        for t in range(self.minibatch_size):
-            if state is None:
-                state = tictactoe.game_state[:]
-            self.states[t] = torch.tensor(state, dtype=torch.float)
-            self.actions[t], self.logps[t] = self.get_action(state, tictactoe.possible_moves)
-            self.values[t] = self.v(torch.tensor(state, dtype=torch.float).to(self.device))
-            self.rewards[t], next_state = tictactoe.play_move(int(self.actions[t]))
-            print("reward, actions", self.rewards[t], self.actions[t])
-            print(t)
-            # episode over
-            if self.rewards[t].item() != 0.0:
-                tictactoe.reset()
-                print("tic tac toe reset", tictactoe.game_state, tictactoe.possible_moves)
-                print("inside", ep_start, t)
-                self._populate_buffers(ep_start, t, 0)
-                ep_start = t + 1
-            state = next_state
-        # if the episode did not end on the last step
-        if self.rewards[-1].item() == 0.0:
-            final_reward = self.v(
-                torch.tensor(state, dtype=torch.float).to(self.device))
-            print("end of epoch", ep_start, self.minibatch_size-1)
-            self._populate_buffers(ep_start, self.minibatch_size-1, final_reward)
-
-
-    def _update(self):
-
-        pi_optim = Adam(self.pi.parameters(), lr=self.pi_lr)
-        v_optim = Adam(self.v.parameters(), lr=self.v_lr)
-
-        # update pi values
-        for i in range(self.pi_train_iters):
-            pi_optim.zero_grad()
-
-            new_logps = self._get_logps(self.states, self.actions)
-            ratios = torch.exp(new_logps - self.logps)
-            clipped_adv = torch.clamp(ratios, 1+self.clip, 1-self.clip) * self.advantages
-            loss = -(torch.min(clipped_adv, self.advantages * ratios)).mean()
-
-            kl = (self.logps - new_logps).mean().item()
-            if kl > 1.5 * self.target_kl:
-                print("Early stopping because target kl reached {}".format(kl))
-                break
-
-            loss.backward(retain_graph=True)
-            pi_optim.step()
-
-        # update v values
-        for i in range(self.v_train_iters):
-            v_optim.zero_grad()
-
-            loss = ((self.values - self.rewards)**2).mean()
-            loss.backward(retain_graph=True)
-
-            v_optim.step()
-
-
-    def train_model(self):
-        for epoch in range(self.epochs):
-            print("epoch: {}".format(epoch))
-            self._produce_trajectories()
-            self._update()
-
-
-    def _get_logps(self, states, actions):
+    def _get_logps(self, states, actions, as_tensors=False):
         pis = self.pi(torch.tensor(states, dtype=torch.float).to(self.device))
-        return torch.tensor([torch.log(pis[i][int(action)]) for i, action in enumerate(actions)], dtype=torch.float)
+        # return each tensor individually so we can maintain the grad_fn
+        if as_tensors:
+            torch_logps = [torch.log(pis[i][int(action)]) for i, action in enumerate(actions)]
+            return torch.stack(torch_logps)
+        return np.array([np.log(pis[i][int(action)]) for i, action in enumerate(actions)], dtype=np.float32)
 
 
     def get_action(self, state, possible_moves):
@@ -156,9 +103,79 @@ class PPO:
             cum_sum += pi_vals[move-1] + addition_sum
             if roll <= cum_sum:
                 return move, torch.log(pi_vals[move-1])
-        print(possible_moves)
-        print(pi_vals)
         return possible_moves[-1], torch.log(pi_vals[possible_moves[-1]-1])
+
+
+    def _produce_trajectories(self):
+
+        self._initialize_buffers()
+        logger = Logger()
+        tictactoe = TicTacToe(logger, self)
+        state = tictactoe.game_state[:]
+        self.states[0] = np.array(state, dtype=np.float32)
+
+        ep_start = 0
+
+        for t in range(self.minibatch_size):
+            if state is None:
+                state = tictactoe.game_state[:]
+            self.states[t] = np.array(state, dtype=np.float32)
+            self.actions[t], self.logps[t] = self.get_action(state, tictactoe.possible_moves)
+            self.values[t] = self.v(torch.tensor(state, dtype=torch.float).to(self.device))
+            self.rewards[t], next_state = tictactoe.play_move(int(self.actions[t]))
+            # episode over
+            if self.rewards[t] != 0.0:
+                tictactoe.reset()
+                self._populate_buffers(ep_start, t, 0)
+                ep_start = t + 1
+            state = next_state
+        # if the episode did not end on the last step
+        if self.rewards[-1] == 0.0:
+            final_reward = self.v(
+                torch.tensor(state, dtype=torch.float).to(self.device)).item()
+            print("end of epoch", ep_start, self.minibatch_size-1)
+            self._populate_buffers(ep_start, self.minibatch_size-1, final_reward)
+
+
+    def _update(self):
+
+        trajectories = self.get_buffers_as_tensors()
+
+        # update pi values
+        for i in range(self.pi_train_iters):
+            self.pi_optim.zero_grad()
+
+            new_logps = self._get_logps(self.states, self.actions, as_tensors=True)
+            print("new logps: {} logps: {}".format(new_logps, trajectories['logps']))
+            ratios = torch.exp(new_logps - trajectories['logps'])
+            clipped_adv = torch.clamp(ratios, 1+self.clip, 1-self.clip) * trajectories['advantages']
+            loss = -(torch.min(clipped_adv, trajectories['advantages'] * ratios)).mean()
+
+            kl = (trajectories['logps'] - new_logps).mean().item()
+            if kl > 1.5 * self.target_kl:
+                print("Early stopping because target kl reached {}".format(kl))
+                break
+
+            print(loss)
+            loss.backward()
+            self.pi_optim.step()
+
+        # update v values
+        for i in range(self.v_train_iters):
+            self.v_optim.zero_grad()
+            values = self.v(trajectories['states'])
+
+            loss = ((values - trajectories['rewards'])**2).mean()
+            loss.backward()
+            
+            self.v_optim.step()
+
+
+    def train_model(self):
+        for epoch in range(self.epochs):
+            print("epoch: {}".format(epoch))
+            self._produce_trajectories()
+            self._update()
 
 
     def load_model(self, path):

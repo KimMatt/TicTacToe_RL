@@ -12,7 +12,8 @@ def argparse(args):
     params = {}
 
     for i in range(0,len(args),2):
-        assert args[i][:1] == "--", print("You have to specify parameters with --[param_name] [value]")
+        print(args[i][:2])
+        assert args[i][:2] == "--", print("You have to specify parameters with --[param_name] [value]")
         param_name = args[i][2:]
         value = np.float32(args[i+1])
         params[param_name] = value
