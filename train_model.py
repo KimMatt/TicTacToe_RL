@@ -2,8 +2,11 @@ import sys
 import numpy as np
 
 from src.algos.agent import Agent
-from src.algos.agent import algo_types_to_args
+from src.algos.a2c import ActorCritic
+from src.algos.ppo import PPO 
+from src.algos.td import TD
 
+algo_types_to_args = {'ppo': PPO, 'td': TD, 'ac':ActorCritic}
 
 help_cmds = ["-h","--help"]
 
@@ -33,6 +36,7 @@ if __name__ == "__main__":
         """.format(", ".join(algo_types)))
     else:
         params = argparse(sys.argv[2:])
-        agent = Agent(cmd,params)
+        algo = algo_types_to_args.get(cmd)
+        agent = algo(params)
         agent.train_model()
         agent.save_model()

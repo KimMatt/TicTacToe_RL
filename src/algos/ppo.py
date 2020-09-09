@@ -7,13 +7,16 @@ from torch.optim import Adam
 import numpy as np
 import scipy.signal
 
+
+from src.algos.agent import Agent
+from src.algos.baselines import RandomAgent
 from src.enviro.tictactoe import TicTacToe
 from src.utils.mlp import construct_mlp
 from src.utils.logger import Logger
-from src.utils.utils import cum_sum
+from src.utils.utils import cum_sum, save_results
 
 
-class PPO:
+class PPO(Agent):
 
 
     def _initialize_buffers(self):
@@ -172,10 +175,22 @@ class PPO:
 
 
     def train_model(self):
+        wins = [None for i in range(self.epochs)]
+        losses = [None for i in range(self.epochs)]
+        ties = [None for i in range(self.epochs)]
+        random = RandomAgent()
+
         for epoch in range(self.epochs):
             print("epoch: {}".format(epoch))
             self._produce_trajectories()
             self._update()
+            
+            win_ratio, loss_ratio, tie_ratio = super().test_model(random, 50)
+            wins[epoch] = win_ratio
+            losses[epoch] = loss_ratio
+            ties[epoch] = tie_ratio
+        
+        save_results(wins, losses, ties, "ppo", self.params)
 
 
     def load_model(self, path):
@@ -197,5 +212,6 @@ class PPO:
             os.mkdir(model_path)
         model_name = "_".join(["{}={}".format(param, self.params[param]) for param in self.params.keys()])
 
-        torch.save(self.v.state_dict, model_path + "v_" + model_name)
-        torch.save(self.pi.state_dict, model_path + "pi_" + model_name)
+        torch.save(self.v.state_dict, model_path + "ppo_v_" + model_name)
+        torch.save(self.pi.state_dict, model_path + "ppo_pi_" + model_name)
+
