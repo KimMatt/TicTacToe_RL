@@ -43,7 +43,7 @@ class PPO(Agent):
         # setup device for pytorch
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         # default values for params
-        self.params = {'gamma': 0.99, 'lam': 0.96, 'epochs': 10, 'minibatch_size':65,
+        self.params = {'gamma': 0.99, 'lam': 0.96, 'epochs': 1000, 'minibatch_size':65,
               'pi_lr': 3e-3, 'v_lr': 1e-2, 'clip':0.1, 'target_kl': 0.02,
               'pi_train_iters': 60, 'v_train_iters': 60}
         # parse the parameters
@@ -166,7 +166,7 @@ class PPO(Agent):
 
             loss = ((values - trajectories['rewards'])**2).mean()
             loss.backward()
-            
+
             self.v_optim.step()
 
 
@@ -180,9 +180,9 @@ class PPO(Agent):
             print("epoch: {}".format(epoch))
             self._produce_trajectories()
             self._update()
-            
+
             wins[epoch], losses[epoch], ties[epoch] = super().test_model(random, 50)
-        
+
         save_results(wins, losses, ties, "ppo", self.params)
 
 
