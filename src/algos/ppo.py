@@ -44,7 +44,7 @@ class PPO(Agent):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         # default values for params
         self.params = {'gamma': 0.99, 'lam': 0.96, 'epochs': 10, 'minibatch_size':65,
-              'pi_lr': 3e-4, 'v_lr': 1e-3, 'clip':0.1, 'target_kl': 0.01,
+              'pi_lr': 3e-3, 'v_lr': 1e-2, 'clip':0.1, 'target_kl': 0.02,
               'pi_train_iters': 60, 'v_train_iters': 60}
         # parse the parameters
         for param in params.keys():
@@ -84,47 +84,46 @@ class PPO(Agent):
         self.rewards[ep_start:ep_end+1] = cum_sum(self.rewards[ep_start:ep_end+1], self.gamma)
 
 
-    def _get_logps(self, states, actions, as_tensors=False):
+    def _get_logps(self, states, actions):
         pis = self.pi(torch.tensor(states, dtype=torch.float).to(self.device))
         # return each tensor individually so we can maintain the grad_fn
-        if as_tensors:
-            torch_logps = [torch.log(pis[i][int(action)]) for i, action in enumerate(actions)]
-            return torch.stack(torch_logps)
-        return np.array([np.log(pis[i][int(action)]) for i, action in enumerate(actions)], dtype=np.float32)
+        torch_logps = [torch.log(pis[i][int(action)]) for i, action in enumerate(actions)]
+        return torch.stack(torch_logps)
 
 
     def get_action(self, state, possible_moves):
         # get the pi values
         pi_vals = self.pi(torch.tensor(state, dtype=torch.float).to(self.device))
         # get the sum of non available moves pi values
-        distribute_sum = np.sum([pi_vals[i].item() for i in range(self.state_size) if i+1 not in possible_moves])
+        distribute_sum = np.sum([pi_vals[i].item() for i in range(self.state_size) if i not in possible_moves])
         addition_sum = distribute_sum / len(possible_moves)
         roll = np.random.random()
         cum_sum = 0
         # choose move from possible moves stochastically
         for move in possible_moves:
-            cum_sum += pi_vals[move-1] + addition_sum
+            cum_sum += pi_vals[move] + addition_sum
             if roll <= cum_sum:
-                return move, torch.log(pi_vals[move-1])
-        return possible_moves[-1], torch.log(pi_vals[possible_moves[-1]-1])
+                return move, torch.log(pi_vals[move])
+        return possible_moves[-1], torch.log(pi_vals[possible_moves[-1]])
 
 
     def _produce_trajectories(self):
 
         self._initialize_buffers()
+
         logger = Logger()
-        tictactoe = TicTacToe(logger, self)
-        state = tictactoe.game_state[:]
-        self.states[0] = np.array(state, dtype=np.float32)
+        opponent = RandomAgent()
+        tictactoe = TicTacToe(logger, opponent)
 
         ep_start = 0
+        state = None
 
         for t in range(self.minibatch_size):
             if state is None:
                 state = tictactoe.game_state[:]
             self.states[t] = np.array(state, dtype=np.float32)
-            self.actions[t], self.logps[t] = self.get_action(state, tictactoe.possible_moves)
             self.values[t] = self.v(torch.tensor(state, dtype=torch.float).to(self.device))
+            self.actions[t], self.logps[t] = self.get_action(state, tictactoe.possible_moves)
             self.rewards[t], next_state = tictactoe.play_move(int(self.actions[t]))
             # episode over
             if self.rewards[t] != 0.0:
@@ -136,7 +135,6 @@ class PPO(Agent):
         if self.rewards[-1] == 0.0:
             final_reward = self.v(
                 torch.tensor(state, dtype=torch.float).to(self.device)).item()
-            print("end of epoch", ep_start, self.minibatch_size-1)
             self._populate_buffers(ep_start, self.minibatch_size-1, final_reward)
 
 
@@ -148,8 +146,7 @@ class PPO(Agent):
         for i in range(self.pi_train_iters):
             self.pi_optim.zero_grad()
 
-            new_logps = self._get_logps(self.states, self.actions, as_tensors=True)
-            print("new logps: {} logps: {}".format(new_logps, trajectories['logps']))
+            new_logps = self._get_logps(self.states, self.actions)
             ratios = torch.exp(new_logps - trajectories['logps'])
             clipped_adv = torch.clamp(ratios, 1+self.clip, 1-self.clip) * trajectories['advantages']
             loss = -(torch.min(clipped_adv, trajectories['advantages'] * ratios)).mean()
@@ -159,7 +156,6 @@ class PPO(Agent):
                 print("Early stopping because target kl reached {}".format(kl))
                 break
 
-            print(loss)
             loss.backward()
             self.pi_optim.step()
 
@@ -185,10 +181,7 @@ class PPO(Agent):
             self._produce_trajectories()
             self._update()
             
-            win_ratio, loss_ratio, tie_ratio = super().test_model(random, 50)
-            wins[epoch] = win_ratio
-            losses[epoch] = loss_ratio
-            ties[epoch] = tie_ratio
+            wins[epoch], losses[epoch], ties[epoch] = super().test_model(random, 50)
         
         save_results(wins, losses, ties, "ppo", self.params)
 
