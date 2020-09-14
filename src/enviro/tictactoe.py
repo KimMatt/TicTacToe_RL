@@ -14,10 +14,6 @@ symmetric_transforms = [{0: 2, 1: 1, 2: 0, 3: 5, 4: 4, 5: 3, 6: 8, 7: 7, 8: 6}, 
                         {0: 8, 1: 7, 2: 6, 3: 5, 4: 4, 5: 3, 6: 2, 7: 1, 8: 0},  # rotate 180
                         {0: 6, 1: 3, 2: 0, 3: 7, 4: 4, 5: 1, 6: 8, 7: 5, 8: 2}]  # rotate 270
 
-forced_symmetric_mapping = {8:[0,2,6], 7:[1,3], 6:[0,2], 3:[1], 5:[1,3], 2:[0]}
-
-symmetric_goals = [0,1,4]
-
 class TicTacToe:
 
     in_progress = False
@@ -51,41 +47,18 @@ class TicTacToe:
         return False
 
 
-    @staticmethod
-    def check_symmetric(old_board, new_board):
-        # Check if any of the symmetric transforms equate the
-        # old and new boards
-        new_board = np.array(new_board)
-        for transform in symmetric_transforms:
-            transformed_state = np.zeros(len(old_board))
-            for key in transform.keys():
-                transformed_state[transform[key]] = old_board[key]
-            if np.array_equal(new_board, transformed_state):
-                return True
-        return False
-
-
-    def transform_symmetric(self, last_move):
-        if last_move not in symmetric_goals:
-            # 1. get optimal positions to move to given last move
-            symmetric_moves = forced_symmetric_mapping[last_move]
-            # 2. while there are optimal positions...
-            while len(symmetric_moves) > 0:
-                # check if moving to optimal position maintains symmetry
-                symmetric_move = symmetric_moves[0]
-                if self.game_state[symmetric_move] == 0:
-                    # 3. if it does then make the move and return
-                    candidate_game_state = self.game_state[:]
-                    candidate_game_state[symmetric_move] = self.game_state[last_move]
-                    candidate_game_state[last_move] = 0
-                    if self.check_symmetric(self.game_state, candidate_game_state):
-                        self.possible_moves.remove(symmetric_move)
-                        self.possible_moves.append(last_move)
-                        self.game_state = candidate_game_state
-                        break
-                # 4. otherwise pop and repeat 2-4
-                symmetric_moves.pop(0)
-        # 5. when list is empty just keep the board the same
+    def get_symmetric_transforms(self, action):
+        # Return a random symmetric rotation or mirror from i = 1 to 8
+        # and the mapping of a given action corresponding to the given
+        # transform
+        transform_choice = np.random.randint(8)
+        if transform_choice == 7:
+            return self.game_state
+        transform = symmetric_transforms[transform_choice]
+        transformed_state = [0 for i in range(len(self.game_state))]
+        for key in transform.keys():
+            transformed_state[transform[key]] = self.game_state[key]
+        return transformed_state, transform[action]
 
 
     def _play_move(self, player_n, move):
@@ -112,14 +85,12 @@ class TicTacToe:
     def play_move(self, move):
         # Play player move
         reward = self._play_move(1, move)
-        self.transform_symmetric(move)
         # If it results in the end of a game
         if reward == 1 or reward == 0.5:
             return reward, self.game_state
         # Play opponent's move
         opponent_move, _ = self.opponent.get_action(self.game_state, self.possible_moves)
         opponent_reward = self._play_move(2, opponent_move)
-        self.transform_symmetric(opponent_move)
         if opponent_reward == 0.5:
             return opponent_reward, self.game_state
         elif opponent_reward == 1:
